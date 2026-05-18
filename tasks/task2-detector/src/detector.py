@@ -81,14 +81,16 @@ def crop_bbox(image: np.ndarray, corner_candidates: Sequence[Sequence[Point2D]])
         # `corners` are expected in LU, RU, RD, LD order.
         src = np.array(corners, dtype=np.float32)
 
-        # Keep 15% border on each side, so the central 70% region contains MNIST.
-        margin = (1.0 - MNIST_INNER_RATIO) * 0.5 * (WARP_OUTPUT_SIZE - 1)
+        # Shrink the source quad toward its center so the warp removes the outer red border.
+        center = np.mean(src, axis=0)
+        src = center + (src - center) * MNIST_INNER_RATIO
+
         dst = np.array(
             [
-                [margin, margin],
-                [WARP_OUTPUT_SIZE - 1 - margin, margin],
-                [WARP_OUTPUT_SIZE - 1 - margin, WARP_OUTPUT_SIZE - 1 - margin],
-                [margin, WARP_OUTPUT_SIZE - 1 - margin],
+                [0, 0],
+                [WARP_OUTPUT_SIZE - 1, 0],
+                [WARP_OUTPUT_SIZE - 1, WARP_OUTPUT_SIZE - 1],
+                [0, WARP_OUTPUT_SIZE - 1],
             ],
             dtype=np.float32,
         )

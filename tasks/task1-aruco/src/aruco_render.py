@@ -122,29 +122,78 @@ def _is_valid_pose_result(result):
 def estimate_marker_pose(marker_corners, marker_length_meters, camera_matrix, dist_coeffs):
     object_points = create_marker_object_points(marker_length_meters)
 
-    # TODO(student): Estimate one marker pose with OpenCV solvePnP.
-    # Input: detected 2D marker corners, marker size, camera_matrix, and dist_coeffs.
-    # Output: rvec and tvec.
-    # `object_points` has already been prepared for you.
-    raise NotImplementedError("estimate_marker_pose is not implemented")
+    image_points = np.asarray(marker_corners, dtype=np.float32).reshape(-1, 2)
+
+    success, rvec, tvec = cv2.solvePnP(
+        object_points,
+        image_points,
+        camera_matrix,
+        dist_coeffs,
+        flags=cv2.SOLVEPNP_IPPE_SQUARE,
+    )
+
+    if not success:
+        raise RuntimeError("solvePnP failed to estimate marker pose")
+
+    return rvec, tvec
 
 
 def render_virtual_object(frame, rvec, tvec, camera_matrix, dist_coeffs, vertices, faces):
-    # TODO(student): Render the loaded OBJ model on top of the ArUco marker.
-    # Input geometry from load_obj(...):
-    #   vertices: list of 3D points, equivalent to an array with shape (N, 3).
-    #   faces: list of triangle vertex indices, equivalent to an array with shape (M, 3).
-    # Output: the rendered frame.
-    #
-    # 1. Convert vertices and faces to numpy arrays if needed.
-    # 2. Normalize / scale / translate the model to fit above the marker.
-    # 3. Use cv2.projectPoints(...) to project 3D vertices to 2D image points.
-    # 4. For each face, collect its three projected 2D vertices.
-    # 5. Draw the triangle edges or filled triangle on frame.
-    #
-    # Model size normalization can be tricky at first; we recommend asking AI for help.
-    
-    raise NotImplementedError("render_virtual_object is not implemented")
+    # 1. Convert vertices and faces to numpy arrays
+    vertices = np.asarray(vertices, dtype=np.float32)
+    faces = np.asarray(faces, dtype=np.int32)
+
+    if vertices.size == 0 or faces.size == 0:
+        return frame
+
+    # 2. Move model center to origin
+    min_xyz = vertices.min(axis=0)
+    max_xyz = vertices.max(axis=0)
+    center = (min_xyz + max_xyz) * 0.5
+    vertices = vertices - center
+
+    # 3. Scale model to marker size
+    size = max_xyz - min_xyz
+    max_size = np.max(size)
+    if max_size > 1e-6:
+        vertices = vertices / max_size * MARKER_LENGTH_METERS
+
+    # 4. Move model above the marker plane
+    vertices[:, 2] -= MARKER_LENGTH_METERS * 0.5
+
+    # 5. Project 3D vertices to 2D image points
+    projected_points, _ = cv2.projectPoints(
+        vertices,
+        rvec,
+        tvec,
+        camera_matrix,
+        dist_coeffs,
+    )
+
+    projected_points = projected_points.reshape(-1, 2).astype(np.int32)
+
+    # 6. Fill each triangle face
+    for face in faces:
+        pts = projected_points[face]
+
+        # 填充三角形
+        cv2.fillConvexPoly(
+            frame,
+            pts,
+            color=(0, 255, 0)
+        )
+
+        # 可选：再画一层边框，更清楚
+        cv2.polylines(
+            frame,
+            [pts],
+            isClosed=True,
+            color=(0, 0, 0),
+            thickness=1,
+            lineType=cv2.LINE_AA,
+        )
+
+    return frame
 
 
 def process_frame(frame, dictionary, camera_matrix, dist_coeffs, vertices, faces):

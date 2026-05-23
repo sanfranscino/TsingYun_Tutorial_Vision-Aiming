@@ -21,40 +21,84 @@ ImageLike = np.ndarray
 
 DEFAULT_MODEL_PATH = Path(__file__).resolve().parents[1] / "models" / "mnist_classifier.npz"
 
-
 def preprocess_mnist_crop(board_crop: ImageLike) -> np.ndarray:
-    # TODO(student): Convert a detected board crop into classifier input.
-    # convert board_crop to a single-channel image using cv2
-    # resize the grayscale crop to 28x28, for example with cv2.resize(...)
-    # normalize values to [0, 1]
-    # convert the result to the tensor/array shape expected by your classifier
-    # return normalized input array
-    raise NotImplementedError("preprocess_mnist_crop is not implemented")
+    # 1. 转成 numpy 数组
+    crop = np.asarray(board_crop)
+
+    if crop.dtype != np.uint8:
+        crop = np.clip(crop, 0, 255).astype(np.uint8)
+
+    # 2. 转灰度图
+    if crop.ndim == 3:
+        # board_crop 一般是 RGB 图
+        gray = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
+    elif crop.ndim == 2:
+        gray = crop
+    else:
+        raise ValueError(f"Unsupported crop shape: {crop.shape}")
+
+    # 3. 调整成 MNIST 的 28x28
+    gray = cv2.resize(gray, (28, 28), interpolation=cv2.INTER_AREA)
+
+    # 4. 归一化到 [0, 1]
+    normalized = gray.astype(np.float32) / 255.0
+
+    # 5. 转成 CNN 输入格式: [batch, channel, height, width]
+    model_input = normalized[np.newaxis, np.newaxis, :, :]
+
+    return model_input
 
 
 def load_mnist_model(model_path: Path = DEFAULT_MODEL_PATH) -> object:
-    # TODO(student): Load your trained MNIST classifier from disk.
-    # Input: model_path.
-    # Output: a trained classifier model ready for inference.
-    # If you use PyTorch, instantiate the model, load the weights, and switch to eval mode.
-    raise NotImplementedError("load_mnist_model is not implemented")
+    from train import MNISTClassifier
+
+    if not model_path.exists():
+        raise FileNotFoundError(
+            f"MNIST model file not found: {model_path}. "
+            "Please run: uv run python tasks/task2-detector/src/train.py"
+        )
+
+    model = MNISTClassifier()
+
+    checkpoint = torch.load(
+        model_path,
+        map_location="cpu",
+    )
+
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model.eval()
+
+    return model
 
 
 def predict_mnist_digit(model: object, model_input: np.ndarray) -> tuple[int, float]:
-    # TODO(student): Run classifier inference and convert scores to digit/confidence.
-    # convert model_input to a torch tensor if needed
-    # run inference under torch.no_grad()
-    # apply F.softmax(...) if the model returns logits
-    # digit = argmax(probabilities)
-    # confidence = probabilities[digit]
-    # return digit, confidence
-    raise NotImplementedError("predict_mnist_digit is not implemented")
+    # 1. numpy 转 torch tensor
+    if isinstance(model_input, np.ndarray):
+        input_tensor = torch.from_numpy(model_input).float()
+    else:
+        input_tensor = model_input.float()
+
+    # 2. 推理，不计算梯度
+    with torch.no_grad():
+        logits = model(input_tensor)
+
+        # 3. logits 转概率
+        probabilities = F.softmax(logits, dim=1)
+
+        # 4. 找概率最大的数字
+        confidence_tensor, digit_tensor = torch.max(probabilities, dim=1)
+
+    digit = int(digit_tensor.item())
+    confidence = float(confidence_tensor.item())
+
+    return digit, confidence
 
 
 def classify_mnist_digit(board_crop: ImageLike, model_path: Path = DEFAULT_MODEL_PATH) -> tuple[int, float]:
-    # TODO(student): Classify the MNIST digit shown on one detected board crop.
-    # model_input = preprocess_mnist_crop(board_crop)
-    # model = load_mnist_model(model_path)
-    # digit, confidence = predict_mnist_digit(model, model_input)
-    # return digit, confidence
-    raise NotImplementedError("classify_mnist_digit is not implemented")
+    model_input = preprocess_mnist_crop(board_crop)
+
+    model = load_mnist_model(model_path)
+
+    digit, confidence = predict_mnist_digit(model, model_input)
+
+    return digit, confidence

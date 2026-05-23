@@ -23,45 +23,144 @@ def download_mnist_dataset(data_dir: Path = DEFAULT_MNIST_DATA_DIR) -> Path:
 
 
 class MNISTClassifier(nn.Module):
-    """Small PyTorch classifier scaffold for 28x28 MNIST crops."""
+    """Small fully connected classifier for 28x28 MNIST crops."""
 
     def __init__(self, input_size: int = 28 * 28, num_classes: int = 10) -> None:
         super().__init__()
-        # TODO(student): fill in your custom model architectures
-        raise NotImplementedError("MNIST classifier model logic not implemented!")
+
+        self.network = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(input_size, 128),
+            nn.ReLU(),
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, num_classes),
+        )
 
     def forward(self, inputs):
-        # TODO(student): fill in your forward process according to your model
-        raise NotImplementedError("MNIST classifier forward logic not implemented!")
+        return self.network(inputs)
 
 
 def select_training_device(torch_module) -> str:
-    # TODO(student): Pick the best accelerator available on the student's PC.
-    # if torch reports CUDA is available:
-    #     return "cuda" for NVIDIA GPU training
-    # else if torch reports MPS is available:
-    #     return "mps" for Apple Silicon GPU training
-    # otherwise:
-    #     return "cpu" so training still works without an accelerator
-    raise NotImplementedError("select_training_device is not implemented")
+    if torch_module.cuda.is_available():
+        return "cuda"
+
+    mps_backend = getattr(getattr(torch_module, "backends", None), "mps", None)
+    if mps_backend is not None and mps_backend.is_available():
+        return "mps"
+
+    return "cpu"
 
 
 def train_mnist_classifier(dataset_dir: Path, output_path: Path) -> Path:
-    
     from torch.utils.data import DataLoader, random_split
     import torchvision
-    # TODO(student): Train the MNIST digit classifier used by model.py.
-    # device = select_training_device(torch)
-    # move the model and each batch to device
-    # read training images and labels from dataset_dir
-    # split examples into training and validation sets
-    # preprocess every image the same way model.preprocess_mnist_crop does
-    # model = MNISTClassifier()
-    # choose loss function, optimizer, batch size, and number of epochs
-    # train until validation accuracy is stable
-    # save the trained model weights or serialized estimator to output_path
-    # return output_path
-    raise NotImplementedError("MNIST training is not implemented")
+    from torchvision import transforms
+
+    device = select_training_device(torch)
+
+    transform = transforms.Compose(
+        [
+            transforms.ToTensor(),
+        ]
+    )
+
+    train_full = torchvision.datasets.MNIST(
+        root=dataset_dir.parent,
+        train=True,
+        download=False,
+        transform=transform,
+    )
+
+    train_size = int(0.9 * len(train_full))
+    val_size = len(train_full) - train_size
+
+    train_dataset, val_dataset = random_split(
+        train_full,
+        [train_size, val_size],
+        generator=torch.Generator().manual_seed(42),
+    )
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=64,
+        shuffle=True,
+    )
+
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=128,
+        shuffle=False,
+    )
+
+    model = MNISTClassifier().to(device)
+
+    loss_fn = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+
+    epochs = 3
+
+    for epoch in range(epochs):
+        model.train()
+        total_loss = 0.0
+        correct = 0
+        total = 0
+
+        for images, labels in train_loader:
+            images = images.to(device)
+            labels = labels.to(device)
+
+            optimizer.zero_grad()
+
+            logits = model(images)
+            loss = loss_fn(logits, labels)
+
+            loss.backward()
+            optimizer.step()
+
+            total_loss += loss.item() * images.size(0)
+
+            preds = torch.argmax(logits, dim=1)
+            correct += (preds == labels).sum().item()
+            total += labels.size(0)
+
+        train_loss = total_loss / total
+        train_acc = correct / total
+
+        model.eval()
+        val_correct = 0
+        val_total = 0
+
+        with torch.no_grad():
+            for images, labels in val_loader:
+                images = images.to(device)
+                labels = labels.to(device)
+
+                logits = model(images)
+                preds = torch.argmax(logits, dim=1)
+
+                val_correct += (preds == labels).sum().item()
+                val_total += labels.size(0)
+
+        val_acc = val_correct / val_total
+
+        print(
+            f"Epoch [{epoch + 1}/{epochs}] "
+            f"loss={train_loss:.4f} "
+            f"train_acc={train_acc:.4f} "
+            f"val_acc={val_acc:.4f}"
+        )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    torch.save(
+        {
+            "model_state_dict": model.state_dict(),
+        },
+        output_path,
+    )
+
+    return output_path
 
 
 def parse_args() -> argparse.Namespace:

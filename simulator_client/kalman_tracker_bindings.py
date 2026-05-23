@@ -10,29 +10,34 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _library_path() -> Path:
+def _library_paths() -> list[Path]:
     env_dir = os.environ.get("TSINGYUN_HW_BUILD_DIR")
 
     if sys.platform == "darwin":
         build_dir = Path(env_dir) if env_dir else REPO_ROOT / "build" / "hw"
-        return build_dir / "tasks" / "task3-tracker" / "libhw_task3_tracker_shared.dylib"
+        return [build_dir / "tasks" / "task3-tracker" / "libhw_task3_tracker_shared.dylib"]
 
     if sys.platform == "win32":
         build_dir = Path(env_dir) if env_dir else REPO_ROOT / "build" / "hw-ninja"
-        return build_dir / "tasks" / "task3-tracker" / "libhw_task3_tracker_shared.dll"
+        task3_dir = build_dir / "tasks" / "task3-tracker"
+        return [
+            task3_dir / "hw_task3_tracker_shared.dll",
+            task3_dir / "libhw_task3_tracker_shared.dll",
+        ]
 
     build_dir = Path(env_dir) if env_dir else REPO_ROOT / "build" / "hw"
-    return build_dir / "tasks" / "task3-tracker" / "libhw_task3_tracker_shared.so"
+    return [build_dir / "tasks" / "task3-tracker" / "libhw_task3_tracker_shared.so"]
 
 
 def _resolve_library_path() -> Path:
-    candidate = _library_path()
-    if candidate.exists():
-        return candidate
+    candidates = _library_paths()
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
 
     raise FileNotFoundError(
         "Could not find the task3 shared library. Build the C++ targets first.\n"
-        f"Expected:\n{candidate}"
+        f"Expected one of:\n" + "\n".join(str(candidate) for candidate in candidates)
     )
 
 

@@ -109,43 +109,136 @@ def crop_bbox(image: np.ndarray, corner_candidates: Sequence[Sequence[Point2D]])
 
 
 def order_corners(corners: Sequence[Point2D]) -> CornerSet:
-    # TODO(student): Sort the four target corners into a stable order.
-    # Input: four 2D corners in arbitrary order.
-    # Output: corners ordered as top-left, top-right, bottom-right, bottom-left.
-    # Compute a stable ordering rule that works for the target board geometry.
-    raise NotImplementedError("order_corners is not implemented")
+    pts = np.array(corners, dtype=np.float32)
+
+    if pts.shape != (4, 2):
+        raise ValueError(f"Expected four 2D corners, got shape {pts.shape}")
+
+    s = pts.sum(axis=1)
+    diff = pts[:, 0] - pts[:, 1]
+
+    top_left = pts[np.argmin(s)]
+    bottom_right = pts[np.argmax(s)]
+    top_right = pts[np.argmax(diff)]
+    bottom_left = pts[np.argmin(diff)]
+
+    return (
+        (float(top_left[0]), float(top_left[1])),
+        (float(top_right[0]), float(top_right[1])),
+        (float(bottom_right[0]), float(bottom_right[1])),
+        (float(bottom_left[0]), float(bottom_left[1])),
+    )
 
 
 def detect_bbox(image: ImageLike, threshold: int = 200) -> list[CornerSet]:
-    # TODO(student): Detect board candidates.
-    # image_array = convert image to an OpenCV-compatible uint8 array
-    # red_mask = threshold reddish pixels into a binary image
-    # optionally clean red_mask with morphology so small noisy blobs disappear
-    # contours = cv2.findContours(red_mask)
-    # corner_candidates = []
-    # for each contour:
-    #     if contour area is too small:
-    #         continue
-    #     polygon = cv2.approxPolyDP(contour, epsilon, closed=true)
-    #     if polygon does not have exactly 4 edges/corners:
-    #         continue
-    #     if polygon is not convex or has unreasonable aspect ratio:
-    #         continue
-    #     corners = order_corners(the four polygon vertices)
-    #     append corners to corner_candidates
-    # return corner_candidates
-    raise NotImplementedError("detect_bbox is not implemented")
+    # 1. 转成 OpenCV 能处理的 uint8 图像
+    image_array = np.asarray(image)
+
+    if image_array.dtype != np.uint8:
+        image_array = np.clip(image_array, 0, 255).astype(np.uint8)
+
+    # 2. 提取 RGB 三个通道
+    # 注意：这里默认输入 image 是 RGB 格式
+    r = image_array[:, :, 0]
+    g = image_array[:, :, 1]
+    b = image_array[:, :, 2]
+
+    # 3. 找红色区域
+    # 红色特点：R 很大，G/B 相对较小
+    red_mask = (
+        (r > threshold) &
+        (g < 120) &
+        (b < 120)
+    ).astype(np.uint8) * 255
+
+    # 4. 形态学处理，去掉小噪点，让红框更连续
+    kernel = np.ones((5, 5), dtype=np.uint8)
+    red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_OPEN, kernel)
+    red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_CLOSE, kernel)
+
+    # 5. 找轮廓
+    contours, _ = cv2.findContours(
+        red_mask,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE,
+    )
+
+    corner_candidates: list[CornerSet] = []
+
+    for contour in contours:
+        # 6. 面积太小的不要，基本是噪声
+        area = cv2.contourArea(contour)
+        if area < 500:
+            continue
+
+        # 7. 把轮廓近似成多边形
+        perimeter = cv2.arcLength(contour, True)
+        polygon = cv2.approxPolyDP(
+            contour,
+            0.02 * perimeter,
+            True,
+        )
+
+        # 8. 只要四边形
+        if len(polygon) != 4:
+            continue
+
+        # 9. 必须是凸四边形
+        if not cv2.isContourConvex(polygon):
+            continue
+
+        # 10. 检查宽高比，太扁/太细的一般不是目标板
+        x, y, w, h = cv2.boundingRect(polygon)
+        if w <= 0 or h <= 0:
+            continue
+
+        aspect_ratio = w / h
+        if aspect_ratio < 0.5 or aspect_ratio > 2.0:
+            continue
+
+        # 11. 整理四个角点格式
+        points = polygon.reshape(4, 2)
+        corners = order_corners(points)
+
+        corner_candidates.append(corners)
+
+    return corner_candidates
 
 
 def detect_mnist_board(image: ImageLike, threshold: int = 200) -> list[Detection]:
-    # TODO(student): Classify detected MNIST-board candidates and filter them.
-    # Input: one RGB image and a threshold parameter.
-    # Output: a list of Detection objects.
-    # Step 1: call detect_bbox(...) to get board candidates.
-    # Step 2: call crop_bbox(...) to extract candidate crops.
-    # Step 3: call classify_mnist_digit(...) on each crop and filter low-confidence results.
-    # Step 4: package the remaining results as Detection objects.
-    raise NotImplementedError("detect_mnist_board is not implemented")
+    # 1. 找出所有红色目标板的四个角点
+    corner_candidates = detect_bbox(image, threshold=threshold)
+
+    if not corner_candidates:
+        return []
+
+    # 2. 根据角点裁剪出数字区域
+    crops = crop_bbox(image, corner_candidates)
+
+    detections: list[Detection] = []
+
+    # 3. 对每个裁剪出来的小图识别数字
+    for corners, crop in zip(corner_candidates, crops):
+        class_id, confidence = classify_mnist_digit(crop)
+
+        # 4. 过滤掉置信度太低的识别结果
+        if confidence < 0.5:
+            continue
+
+        # 5. 根据角点生成 bbox
+        bbox = _bbox_from_corners(corners)
+
+        # 6. 打包成 Detection 对象
+        detection = Detection(
+            class_id=int(class_id),
+            confidence=float(confidence),
+            bbox=bbox,
+            corners=corners,
+        )
+
+        detections.append(detection)
+
+    return detections
 
 
 def solve_pnp(
@@ -155,23 +248,54 @@ def solve_pnp(
     board_height_meters: float,
     dist_coeffs: Sequence[float] | None = None,
 ) -> list[Detection]:
-    # TODO(student): Fill rvec and tvec for every valid Detection.
-    # half_width = board_width_meters / 2
-    # half_height = board_height_meters / 2
-    # object_points = four physical board corners as float32:
-    #     (-half_width, -half_height, 0)
-    #     (half_width, -half_height, 0)
-    #     (half_width, half_height, 0)
-    #     (-half_width, half_height, 0)
-    # camera_array = camera_matrix as a 3x3 float64 array
-    # dist_array = zero distortion if dist_coeffs is not provided
-    # result = []
-    # for each detection:
-    #     image_points = detection.corners as a float32 4x2 array
-    #     call cv2.solvePnP with object_points, image_points, camera_array, and dist_array
-    #     if OpenCV reports failure:
-    #         skip this detection or raise a clear error
-    #     fill detection.rvec and detection.tvec with the OpenCV result
-    #     append detection to result
-    # return result
-    raise NotImplementedError("solve_pnp is not implemented")
+    # 1. 目标板真实世界里的四个角点坐标，单位是米
+    half_width = board_width_meters / 2.0
+    half_height = board_height_meters / 2.0
+
+    object_points = np.array(
+        [
+            [-half_width, -half_height, 0.0],  # 左上
+            [ half_width, -half_height, 0.0],  # 右上
+            [ half_width,  half_height, 0.0],  # 右下
+            [-half_width,  half_height, 0.0],  # 左下
+        ],
+        dtype=np.float32,
+    )
+
+    # 2. 相机内参矩阵
+    camera_array = np.array(camera_matrix, dtype=np.float64)
+
+    # 3. 畸变参数，没有就默认无畸变
+    if dist_coeffs is None:
+        dist_array = np.zeros((5, 1), dtype=np.float64)
+    else:
+        dist_array = np.array(dist_coeffs, dtype=np.float64)
+
+    result: list[Detection] = []
+
+    for detection in detections:
+        # 4. 图像里的四个角点
+        image_points = np.array(detection.corners, dtype=np.float32)
+
+        if image_points.shape != (4, 2):
+            continue
+
+        # 5. PnP 解算
+        success, rvec, tvec = cv2.solvePnP(
+            object_points,
+            image_points,
+            camera_array,
+            dist_array,
+            flags=cv2.SOLVEPNP_ITERATIVE,
+        )
+
+        if not success:
+            continue
+
+        # 6. 填回 detection 里面
+        detection.rvec = rvec
+        detection.tvec = tvec
+
+        result.append(detection)
+
+    return result

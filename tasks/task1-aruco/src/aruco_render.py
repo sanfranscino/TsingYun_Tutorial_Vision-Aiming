@@ -146,22 +146,32 @@ def render_virtual_object(frame, rvec, tvec, camera_matrix, dist_coeffs, vertice
     if vertices.size == 0 or faces.size == 0:
         return frame
 
-    # 2. Move model center to origin
+    # 2. OBJ models use Y as the upright axis. The ArUco marker plane is XY,
+    # and negative Z points out of the board in this pose convention.
+    vertices = np.column_stack(
+        [
+            vertices[:, 0],
+            vertices[:, 2],
+            -vertices[:, 1],
+        ]
+    ).astype(np.float32)
+
+    # 3. Move model center to origin
     min_xyz = vertices.min(axis=0)
     max_xyz = vertices.max(axis=0)
     center = (min_xyz + max_xyz) * 0.5
     vertices = vertices - center
 
-    # 3. Scale model to marker size
+    # 4. Scale model to marker size
     size = max_xyz - min_xyz
     max_size = np.max(size)
     if max_size > 1e-6:
         vertices = vertices / max_size * MARKER_LENGTH_METERS
 
-    # 4. Move model above the marker plane
-    vertices[:, 2] -= MARKER_LENGTH_METERS * 0.5
+    # 5. Put the base of the upright model on the marker plane.
+    vertices[:, 2] -= vertices[:, 2].max()
 
-    # 5. Project 3D vertices to 2D image points
+    # 6. Project 3D vertices to 2D image points
     projected_points, _ = cv2.projectPoints(
         vertices,
         rvec,
@@ -172,7 +182,7 @@ def render_virtual_object(frame, rvec, tvec, camera_matrix, dist_coeffs, vertice
 
     projected_points = projected_points.reshape(-1, 2).astype(np.int32)
 
-    # 6. Fill each triangle face
+    # 7. Fill each triangle face
     for face in faces:
         pts = projected_points[face]
 
